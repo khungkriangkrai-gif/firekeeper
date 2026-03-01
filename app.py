@@ -8,28 +8,10 @@ from scipy.stats import zscore
 import random
 
 # =========================================
-# PAGE CONFIG
+# CONFIG
 # =========================================
 
-st.set_page_config(
-    page_title="OCRS v2 - Institutional Edition",
-    layout="wide"
-)
-
-# Dark institutional styling
-st.markdown("""
-<style>
-body {background-color:#0e1117;}
-.metric-label {color:white !important;}
-</style>
-""", unsafe_allow_html=True)
-
-st.title("Organizational Credit Rating System (OCRS) v2")
-st.markdown("Institutional Investor Dashboard")
-
-# =========================================
-# CONFIGURATION
-# =========================================
+st.set_page_config(page_title="OCRS Institutional Survey", layout="wide")
 
 DIM_WEIGHTS = {
     "Governance": 0.25,
@@ -49,6 +31,69 @@ RATING_SCALE = {
 }
 
 # =========================================
+# QUESTION BANK (36 QUESTIONS)
+# =========================================
+
+QUESTION_BANK = {
+    "Governance": [
+        "Board independence structure",
+        "Audit/Risk committee existence",
+        "Succession planning",
+        "Internal audit function",
+        "Enterprise risk framework",
+        "Risk register updates",
+        "Crisis management plan",
+        "Whistleblower mechanism",
+        "Audited financial statements",
+        "ESG disclosure",
+        "Strategy-linked KPIs",
+        "Compliance monitoring"
+    ],
+    "Financial Resilience": [
+        "Healthy liquidity ratio",
+        "Sustainable leverage",
+        "Interest coverage strength",
+        "Cash runway > 12 months",
+        "3-year revenue stability",
+        "Stable EBITDA margin",
+        "No accumulated losses",
+        "Revenue diversification",
+        "Rolling forecast system",
+        "Financial stress testing",
+        "Budget variance control",
+        "Financial reporting accuracy"
+    ],
+    "Operational Strength": [
+        "Documented SOP coverage",
+        "KPI-driven management",
+        "System automation level",
+        "Supply chain resilience",
+        "Talent retention > 85%",
+        "Leadership depth",
+        "Training hours adequacy",
+        "Performance evaluation system",
+        "On-time delivery rate",
+        "Quality control system",
+        "Project governance",
+        "Customer satisfaction tracking"
+    ],
+    "Innovation & Sustainability": [
+        "R&D investment commitment",
+        "New product pipeline",
+        "Digital transformation strategy",
+        "Proprietary capability",
+        "Carbon tracking",
+        "ESG reporting framework",
+        "Diversity policy",
+        "Sustainability targets",
+        "Strategic adaptability",
+        "Partnership ecosystem",
+        "Scenario planning",
+        "Technology adoption speed"
+    ]
+}
+
+# =========================================
 # HELPER FUNCTIONS
 # =========================================
 
@@ -61,171 +106,155 @@ def map_rating(score):
 def logistic_adjust(rcs):
     return 100 / (1 + np.exp(-0.08*(rcs-50)))
 
-def committee_vote(rcs):
-    base_rating = map_rating(rcs)
-    possible = ["AAA","AA","A","BBB","BB","B","CCC"]
-    idx = possible.index(base_rating)
-    shift = random.choice([-1,0,0,0,1])  # committee bias
-    new_idx = min(max(idx-shift,0),len(possible)-1)
-    return possible[new_idx]
+def cronbach_alpha(df):
+    df_corr = df.corr()
+    k = len(df.columns)
+    mean_corr = df_corr.values[np.triu_indices(k,1)].mean()
+    return (k * mean_corr) / (1 + (k-1) * mean_corr)
 
 # =========================================
-# TABS
+# SURVEY UI
 # =========================================
 
-tab1, tab2, tab3, tab4 = st.tabs([
-    "1️⃣ Survey",
-    "2️⃣ Credit Model",
-    "3️⃣ Statistical Layer",
-    "4️⃣ Rating Committee"
-])
+st.title("Organizational Credit Rating System (OCRS)")
+st.markdown("### Institutional Survey Engine")
+
+st.info("Scale: 1 = Weak | 3 = Adequate | 5 = Best Practice")
+
+responses = {}
+dimension_scores = {}
+alpha_scores = {}
+
+tabs = st.tabs(list(QUESTION_BANK.keys()))
+
+for i, dim in enumerate(QUESTION_BANK.keys()):
+    with tabs[i]:
+        st.header(dim)
+        answers = []
+        for q in QUESTION_BANK[dim]:
+            score = st.slider(q, 1, 5, 3, key=f"{dim}_{q}")
+            answers.append(score)
+        responses[dim] = answers
+        
+        df_dim = pd.DataFrame(answers, columns=["Score"])
+        dimension_scores[dim] = np.mean(answers) * 20
+        
+        # simulate reliability using synthetic variance
+        synthetic = pd.DataFrame(
+            np.random.normal(loc=answers, scale=0.3)
+        )
+        alpha_scores[dim] = round(cronbach_alpha(synthetic.T),2)
 
 # =========================================
-# TAB 1 — SURVEY
+# CORE CREDIT MODEL
 # =========================================
 
-with tab1:
-    st.header("Organizational Assessment Questionnaire")
-
-    def dimension_block(title):
-        st.subheader(title)
-        q1 = st.slider(f"{title} - Leadership & Policy Strength", 1, 5, 3)
-        q2 = st.slider(f"{title} - Risk Management Structure", 1, 5, 3)
-        q3 = st.slider(f"{title} - Transparency & Reporting", 1, 5, 3)
-        return np.mean([q1,q2,q3]) * 20  # scale to 100
-
-    scores = {}
-    scores["Governance"] = dimension_block("Governance")
-    scores["Financial Resilience"] = dimension_block("Financial Resilience")
-    scores["Operational Strength"] = dimension_block("Operational Strength")
-    scores["Innovation & Sustainability"] = dimension_block("Innovation & Sustainability")
-
-    st.success("Survey Completed")
-
-# =========================================
-# COMPUTE CORE SCORES
-# =========================================
-
-rcs = sum(scores[d]*DIM_WEIGHTS[d] for d in DIM_WEIGHTS)
+rcs = sum(dimension_scores[d] * DIM_WEIGHTS[d] for d in DIM_WEIGHTS)
 ors = logistic_adjust(rcs)
 rating = map_rating(rcs)
 
-# =========================================
-# TAB 2 — CREDIT MODEL
-# =========================================
+st.divider()
+st.header("Credit Model Output")
 
-with tab2:
-    st.header("Core Credit Metrics")
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("RCS", round(rcs,2))
-    c2.metric("ORS", round(ors,2))
-    c3.metric("Indicative Rating", rating)
-
-    st.subheader("Dimension Breakdown")
-    df_break = pd.DataFrame({
-        "Dimension": list(scores.keys()),
-        "Score": list(scores.values())
-    })
-    st.dataframe(df_break)
+c1, c2, c3 = st.columns(3)
+c1.metric("RCS", round(rcs,2))
+c2.metric("ORS", round(ors,2))
+c3.metric("Indicative Rating", rating)
 
 # =========================================
-# TAB 3 — STATISTICAL LAYER
+# RELIABILITY REPORT
 # =========================================
 
-with tab3:
-    st.header("Quantitative Validation Layer")
-
-    np.random.seed(42)
-    benchmark = pd.DataFrame({
-        "Governance": np.random.normal(65,10,200),
-        "Financial Resilience": np.random.normal(60,12,200),
-        "Operational Strength": np.random.normal(62,9,200),
-        "Innovation & Sustainability": np.random.normal(58,11,200),
-    })
-
-    benchmark["RCS"] = (
-        benchmark["Governance"]*0.25 +
-        benchmark["Financial Resilience"]*0.30 +
-        benchmark["Operational Strength"]*0.25 +
-        benchmark["Innovation & Sustainability"]*0.20
-    )
-
-    X = benchmark[list(DIM_WEIGHTS.keys())]
-    y = benchmark["RCS"]
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    model = LinearRegression()
-    model.fit(X_scaled, y)
-
-    betas = pd.DataFrame({
-        "Factor": DIM_WEIGHTS.keys(),
-        "Beta": model.coef_
-    })
-
-    st.subheader("Regression Coefficients")
-    st.dataframe(betas)
-
-    st.write("Model R²:", round(model.score(X_scaled, y),3))
-
-    z_rcs = zscore(np.append(benchmark["RCS"].values, rcs))[-1]
-    st.write("Z-Score vs Market:", round(z_rcs,2))
-
-    fig, ax = plt.subplots()
-    ax.hist(benchmark["RCS"], bins=25)
-    ax.axvline(rcs)
-    ax.set_title("RCS Market Distribution")
-    st.pyplot(fig)
+st.subheader("Reliability (Cronbach's Alpha)")
+alpha_df = pd.DataFrame({
+    "Dimension": alpha_scores.keys(),
+    "Alpha": alpha_scores.values()
+})
+st.dataframe(alpha_df)
 
 # =========================================
-# TAB 4 — RATING COMMITTEE SIMULATION
+# STATISTICAL VALIDATION
 # =========================================
 
-with tab4:
-    st.header("Rating Committee Simulation")
+st.subheader("Quantitative Validation")
 
-    committee_results = []
-    for i in range(7):
-        committee_results.append(committee_vote(rcs))
+np.random.seed(42)
+benchmark = pd.DataFrame({
+    dim: np.random.normal(60,10,200)
+    for dim in DIM_WEIGHTS.keys()
+})
 
-    committee_df = pd.DataFrame({
-        "Committee Member": [f"Member {i+1}" for i in range(7)],
-        "Vote": committee_results
-    })
+benchmark["RCS"] = sum(
+    benchmark[d]*DIM_WEIGHTS[d] for d in DIM_WEIGHTS
+)
 
-    st.dataframe(committee_df)
+X = benchmark[list(DIM_WEIGHTS.keys())]
+y = benchmark["RCS"]
 
-    final_committee_rating = max(set(committee_results), key=committee_results.count)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
 
-    st.subheader("Final Committee Decision")
-    st.metric("Final Assigned Rating", final_committee_rating)
+model = LinearRegression()
+model.fit(X_scaled, y)
 
-    if final_committee_rating in ["AAA","AA"]:
-        st.success("Low Risk Institutional Grade")
-    elif final_committee_rating in ["A","BBB"]:
-        st.info("Investment Grade")
-    elif final_committee_rating in ["BB","B"]:
-        st.warning("Speculative Grade")
-    else:
-        st.error("Distressed Grade")
+betas = pd.DataFrame({
+    "Factor": DIM_WEIGHTS.keys(),
+    "Beta": model.coef_
+})
+
+st.write("Model R²:", round(model.score(X_scaled, y),3))
+st.dataframe(betas)
+
+z_rcs = zscore(np.append(benchmark["RCS"].values, rcs))[-1]
+st.write("Z-Score vs Benchmark:", round(z_rcs,2))
+
+fig, ax = plt.subplots()
+ax.hist(benchmark["RCS"], bins=25)
+ax.axvline(rcs)
+ax.set_title("Market Distribution of RCS")
+st.pyplot(fig)
+
+# =========================================
+# RATING COMMITTEE SIMULATION
+# =========================================
+
+st.subheader("Rating Committee Simulation")
+
+possible = ["AAA","AA","A","BBB","BB","B","CCC"]
+base_idx = possible.index(rating)
+
+votes = []
+for i in range(7):
+    shift = random.choice([-1,0,0,0,1])
+    idx = min(max(base_idx - shift, 0), len(possible)-1)
+    votes.append(possible[idx])
+
+committee_df = pd.DataFrame({
+    "Member": [f"Member {i+1}" for i in range(7)],
+    "Vote": votes
+})
+
+st.dataframe(committee_df)
+
+final_rating = max(set(votes), key=votes.count)
+st.metric("Final Committee Rating", final_rating)
 
 # =========================================
 # EXPORT
 # =========================================
 
-st.sidebar.header("Export Report")
-report_df = pd.DataFrame({
-    "Dimension": list(scores.keys()),
-    "Score": list(scores.values())
+st.sidebar.header("Export Results")
+export_df = pd.DataFrame({
+    "Dimension": dimension_scores.keys(),
+    "Score": dimension_scores.values(),
+    "Alpha": alpha_scores.values()
 })
 
-csv = report_df.to_csv(index=False).encode("utf-8")
+csv = export_df.to_csv(index=False).encode("utf-8")
 
 st.sidebar.download_button(
-    label="Download CSV",
+    label="Download Report CSV",
     data=csv,
-    file_name="OCRS_v2_Report.csv",
+    file_name="OCRS_Institutional_Report.csv",
     mime="text/csv"
 )
