@@ -1,158 +1,274 @@
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
-from dataclasses import dataclass
-from mpl_toolkits.mplot3d import Axes3D
+import plotly.graph_objects as go
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib import colors
+from reportlab.lib.units import inch
+from reportlab.platypus import Image as RLImage
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfbase import pdfmetrics
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import BaseDocTemplate, Frame
+from reportlab.platypus import PageTemplate
+from reportlab.platypus import KeepTogether
+import tempfile
+import os
 
-# --------------------------
-# Core Model
-# --------------------------
-
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
-
-
-@dataclass
-class ThermodynamicLayer:
-    entropy: float
-    empathy: float
-    alpha: float = 0.6
-
-    def effective_entropy(self):
-        return max(0, self.entropy - self.alpha * self.empathy)
-
-
-@dataclass
-class BioInformationLayer:
-    identity_coherence: float
-
-
-@dataclass
-class MeaningLayer:
-    purpose_clarity: float
-
-
-class NICSModel:
-
-    def __init__(self,
-                 beta_identity=0.04,
-                 beta_purpose=0.05,
-                 beta_entropy=0.06):
-        self.beta_identity = beta_identity
-        self.beta_purpose = beta_purpose
-        self.beta_entropy = beta_entropy
-
-    def compute(self, thermo, bio, meaning):
-
-        eff_entropy = thermo.effective_entropy()
-
-        linear_score = (
-            self.beta_identity * bio.identity_coherence +
-            self.beta_purpose * meaning.purpose_clarity -
-            self.beta_entropy * eff_entropy
-        )
-
-        coherence = sigmoid(linear_score)
-        nics_score = round(coherence * 100, 2)
-
-        return nics_score, eff_entropy
-
-    @staticmethod
-    def classify(score):
-        if score < 40:
-            return "Collapse"
-        elif score < 70:
-            return "Survival"
-        else:
-            return "Resilience"
-
-
-# --------------------------
-# Streamlit UI
-# --------------------------
+# --------------------------------------------------
+# CONFIG
+# --------------------------------------------------
 
 st.set_page_config(layout="wide")
-st.title("🔥 FireKeeper Unified Theory Dashboard")
-st.subheader("NICS Index & Phase Portrait Visualization")
 
-col1, col2 = st.columns(2)
+# --------------------------------------------------
+# EXECUTIVE THEME SWITCH
+# --------------------------------------------------
 
-with col1:
-    entropy = st.slider("Entropy", 0, 100, 70)
-    empathy = st.slider("Empathy", 0, 100, 40)
-    identity = st.slider("Identity Coherence", 0, 100, 60)
-    purpose = st.slider("Purpose Clarity", 0, 100, 75)
+theme = st.sidebar.selectbox("Executive Theme", ["Dark Boardroom", "Light Policy"])
+presentation_mode = st.sidebar.toggle("4K Presentation Mode")
+animate_phase = st.sidebar.toggle("Animated Phase Portrait")
+export_pdf = st.sidebar.button("Export Executive PDF Snapshot")
 
-# Model computation
-thermo = ThermodynamicLayer(entropy, empathy)
-bio = BioInformationLayer(identity)
-meaning = MeaningLayer(purpose)
+if theme == "Dark Boardroom":
+    bg = "#0f172a"
+    panel = "#1e293b"
+    text = "#e2e8f0"
+    accent = "#22c55e"
+else:
+    bg = "#f8fafc"
+    panel = "#ffffff"
+    text = "#0f172a"
+    accent = "#15803d"
 
-model = NICSModel()
-nics_score, eff_entropy = model.compute(thermo, bio, meaning)
-state = model.classify(nics_score)
+max_width = "1800px" if presentation_mode else "1200px"
+title_size = "56px" if presentation_mode else "36px"
 
-with col2:
-    st.metric("NICS Score", nics_score)
-    st.metric("Effective Entropy", round(eff_entropy, 2))
-    st.metric("System State", state)
+st.markdown(f"""
+<style>
+body {{
+    background-color: {bg};
+}}
+.main {{
+    background-color: {bg};
+    max-width: {max_width};
+    margin: auto;
+}}
+.metric-card {{
+    background-color: {panel};
+    padding: 40px;
+    border-radius: 16px;
+    text-align: center;
+    box-shadow: 0 6px 30px rgba(0,0,0,0.3);
+}}
+.metric-value {{
+    font-size: 48px;
+    font-weight: 600;
+    color: {accent};
+}}
+.metric-label {{
+    font-size: 14px;
+    letter-spacing: 1px;
+    color: #94a3b8;
+}}
+h1 {{
+    font-size: {title_size};
+    color: {text};
+}}
+h2,h3,h4 {{
+    color: {text};
+}}
+</style>
+""", unsafe_allow_html=True)
 
-# --------------------------
-# 2D Sensitivity Plot
-# --------------------------
+# --------------------------------------------------
+# HEADER
+# --------------------------------------------------
 
-st.subheader("📈 NICS Sensitivity to Entropy")
+st.markdown(f"<h1>🔥 FireKeeper Unified Theory</h1>", unsafe_allow_html=True)
+st.markdown("### Executive Resilience Intelligence Dashboard")
 
-entropy_range = np.linspace(0, 100, 200)
-scores = []
+# --------------------------------------------------
+# INPUT SLIDERS
+# --------------------------------------------------
 
-for e in entropy_range:
-    temp = ThermodynamicLayer(e, empathy)
-    score, _ = model.compute(temp, bio, meaning)
-    scores.append(score)
+colA, colB, colC, colD = st.columns(4)
+entropy = colA.slider("Entropy", 0, 100, 70)
+empathy = colB.slider("Empathy", 0, 100, 40)
+identity = colC.slider("Identity", 0, 100, 60)
+purpose = colD.slider("Purpose", 0, 100, 75)
 
-fig1 = plt.figure()
-plt.plot(entropy_range, scores)
-plt.xlabel("Entropy")
-plt.ylabel("NICS Score")
-plt.title("NICS vs Entropy")
-st.pyplot(fig1)
+# --------------------------------------------------
+# CORE MODEL
+# --------------------------------------------------
 
-# --------------------------
-# 3D Phase Portrait
-# --------------------------
+effective_entropy = entropy - (empathy * 0.4)
+nics_score = (
+    0.35 * purpose +
+    0.25 * identity +
+    0.25 * empathy +
+    0.15 * (100 - effective_entropy)
+)
 
-st.subheader("🌌 3D Phase Portrait (Entropy–Identity–Purpose)")
+if nics_score > 75:
+    system_state = "Resilient"
+elif nics_score > 50:
+    system_state = "Adaptive"
+else:
+    system_state = "At Risk"
 
-E = np.linspace(0, 100, 20)
-I = np.linspace(0, 100, 20)
-P = np.linspace(0, 100, 20)
+# --------------------------------------------------
+# EXECUTIVE KPI CARDS
+# --------------------------------------------------
 
-E_grid, I_grid = np.meshgrid(E, I)
-P_fixed = purpose
+c1, c2, c3 = st.columns(3)
 
-Z = []
+with c1:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">NICS SCORE</div>
+        <div class="metric-value">{nics_score:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-for i in range(len(E)):
-    row = []
-    for j in range(len(I)):
-        thermo = ThermodynamicLayer(E_grid[i][j], empathy)
-        bio = BioInformationLayer(I_grid[i][j])
-        meaning = MeaningLayer(P_fixed)
-        score, _ = model.compute(thermo, bio, meaning)
-        row.append(score)
-    Z.append(row)
+with c2:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">EFFECTIVE ENTROPY</div>
+        <div class="metric-value">{effective_entropy:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-Z = np.array(Z)
+with c3:
+    st.markdown(f"""
+    <div class="metric-card">
+        <div class="metric-label">SYSTEM STATE</div>
+        <div class="metric-value">{system_state}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-fig2 = plt.figure()
-ax = fig2.add_subplot(111, projection='3d')
-ax.plot_surface(E_grid, I_grid, Z)
+st.markdown("---")
 
-ax.set_xlabel("Entropy")
-ax.set_ylabel("Identity")
-ax.set_zlabel("NICS Score")
+# --------------------------------------------------
+# GAUGE
+# --------------------------------------------------
 
-st.pyplot(fig2)
+fig_gauge = go.Figure(go.Indicator(
+    mode="gauge+number",
+    value=nics_score,
+    number={'font': {'size': 50}},
+    gauge={
+        'axis': {'range': [0, 100]},
+        'bar': {'color': accent},
+        'bgcolor': panel
+    }
+))
 
-st.caption("Model: Nonlinear bounded coherence model using sigmoid stability mapping.")
+fig_gauge.update_layout(
+    paper_bgcolor=bg,
+    font={'color': text}
+)
+
+# --------------------------------------------------
+# 3D SURFACE
+# --------------------------------------------------
+
+x = np.linspace(0, 100, 30)
+y = np.linspace(0, 100, 30)
+X, Y = np.meshgrid(x, y)
+Z = 0.4 * Y + 0.6 * X - 0.002 * (X * Y)
+
+fig_surface = go.Figure(data=[go.Surface(z=Z, x=X, y=Y, colorscale="Viridis")])
+
+fig_surface.update_layout(
+    paper_bgcolor=bg,
+    scene=dict(
+        xaxis=dict(backgroundcolor=bg),
+        yaxis=dict(backgroundcolor=bg),
+        zaxis=dict(backgroundcolor=bg),
+    )
+)
+
+# --------------------------------------------------
+# PHASE PORTRAIT (Animated Option)
+# --------------------------------------------------
+
+theta = np.linspace(0, 4*np.pi, 200)
+r = np.linspace(10, 50, 200)
+
+x_phase = r * np.cos(theta)
+y_phase = r * np.sin(theta)
+
+fig_phase = go.Figure()
+
+if animate_phase:
+    frames = []
+    for i in range(20, len(theta), 5):
+        frames.append(go.Frame(
+            data=[go.Scatter(x=x_phase[:i], y=y_phase[:i], mode="lines")]
+        ))
+
+    fig_phase.add_trace(go.Scatter(x=x_phase[:20], y=y_phase[:20], mode="lines"))
+    fig_phase.frames = frames
+    fig_phase.update_layout(
+        updatemenus=[dict(
+            type="buttons",
+            buttons=[dict(label="Play",
+                          method="animate",
+                          args=[None])]
+        )]
+    )
+else:
+    fig_phase.add_trace(go.Scatter(x=x_phase, y=y_phase, mode="lines"))
+
+fig_phase.update_layout(
+    paper_bgcolor=bg,
+    plot_bgcolor=bg,
+    font={'color': text}
+)
+
+# --------------------------------------------------
+# LAYOUT
+# --------------------------------------------------
+
+col_left, col_right = st.columns(2)
+
+with col_left:
+    st.plotly_chart(fig_gauge, use_container_width=True)
+    st.plotly_chart(fig_phase, use_container_width=True)
+
+with col_right:
+    st.plotly_chart(fig_surface, use_container_width=True)
+
+# --------------------------------------------------
+# PDF EXPORT
+# --------------------------------------------------
+
+if export_pdf:
+    tmpdir = tempfile.mkdtemp()
+    image_path = os.path.join(tmpdir, "snapshot.png")
+    fig_gauge.write_image(image_path)
+
+    pdf_path = os.path.join(tmpdir, "Executive_Report.pdf")
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4)
+    elements = []
+
+    style = ParagraphStyle(
+        name='Title',
+        fontSize=18,
+        textColor=colors.black
+    )
+
+    elements.append(Paragraph("FireKeeper Executive Snapshot", style))
+    elements.append(Spacer(1, 0.3 * inch))
+    elements.append(RLImage(image_path, width=4*inch, height=4*inch))
+
+    doc.build(elements)
+
+    with open(pdf_path, "rb") as f:
+        st.download_button(
+            label="Download Executive PDF",
+            data=f,
+            file_name="FireKeeper_Executive_Report.pdf",
+            mime="application/pdf"
+        )
