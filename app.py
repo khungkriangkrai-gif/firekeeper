@@ -1,155 +1,213 @@
-import streamlit as st
 import numpy as np
-import plotly.graph_objects as go
-import io
-from datetime import datetime
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
 
-# PDF
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib import colors
-from reportlab.lib.units import inch
-from reportlab.lib.pagesizes import A4
+# =====================================================
+# 1. NORMALIZATION UTILITIES
+# =====================================================
 
-# =============================
-# PAGE CONFIG
-# =============================
-st.set_page_config(layout="wide")
+def normalize_0_100(series):
+    return 100 * (series - series.min()) / (series.max() - series.min())
 
-# =============================
-# SIDEBAR CONTROLS
-# =============================
-st.sidebar.title("Executive Theme")
+def normalize_likert(avg_score):
+    return (avg_score - 1) / 4 * 100
 
-theme = st.sidebar.selectbox(
-    "Theme Mode",
-    ["Light Boardroom", "Dark Boardroom"]
-)
 
-presentation_4k = st.sidebar.toggle("4K Presentation Mode")
-animated = st.sidebar.toggle("Animated Phase Portrait")
+# =====================================================
+# 2. CRONBACH ALPHA (RELIABILITY)
+# =====================================================
 
-# =============================
-# THEME CONFIG
-# =============================
-if theme == "Dark Boardroom":
-    bg_color = "#0b1c2d"
-    text_color = "white"
-else:
-    bg_color = "white"
-    text_color = "black"
+def cronbach_alpha(df):
+    items = df.values
+    item_vars = items.var(axis=0, ddof=1)
+    total_var = items.sum(axis=1).var(ddof=1)
+    n = df.shape[1]
+    return (n/(n-1)) * (1 - item_vars.sum()/total_var)
 
-st.markdown(
-    f"""
-    <style>
-    .stApp {{
-        background-color: {bg_color};
-        color: {text_color};
-    }}
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 
-# =============================
-# MODEL (Example Dynamics)
-# =============================
-def compute_model(x):
-    return x - x**3
+# =====================================================
+# 3. DIMENSION SCORING
+# =====================================================
 
-x = np.linspace(-2, 2, 400)
-y = compute_model(x)
+def calculate_dimension_score(df, cols, reverse=False):
+    avg = df[cols].mean(axis=1)
+    score = normalize_likert(avg)
+    if reverse:
+        score = 100 - score
+    return score.round(2)
 
-# =============================
-# PHASE PORTRAIT
-# =============================
-fig = go.Figure()
 
-fig.add_trace(
-    go.Scatter(
-        x=x,
-        y=y,
-        mode="lines",
-        line=dict(width=3),
-        name="Phase Curve"
-    )
-)
+# =====================================================
+# 4. COMPUTE RCS (REGRESSION WEIGHTED)
+# =====================================================
 
-fig.update_layout(
-    template="plotly_dark" if theme == "Dark Boardroom" else "plotly_white",
-    height=800 if presentation_4k else 500,
-    title="Phase Portrait"
-)
+def compute_rcs(df_dims, financial_outcome):
 
-if animated:
-    frames = []
-    for shift in np.linspace(0, 2, 30):
-        frames.append(
-            go.Frame(
-                data=[
-                    go.Scatter(
-                        x=x,
-                        y=compute_model(x + shift),
-                        mode="lines"
-                    )
-                ]
-            )
-        )
-    fig.frames = frames
+    X = df_dims.copy()
+    X["Entropy"] = -X["Entropy"]  # negative driver
 
-st.plotly_chart(fig, use_container_width=True)
+    model = LinearRegression()
+    model.fit(X, financial_outcome)
 
-# =============================
-# METRICS PANEL
-# =============================
-st.markdown("### Executive Metrics")
+    betas = model.coef_
+    r_squared = model.score(X, financial_outcome)
 
-col1, col2, col3 = st.columns(3)
+    rcs_raw = (X * betas).sum(axis=1)
+    rcs_scaled = normalize_0_100(rcs_raw)
 
-with col1:
-    st.metric("Stability Index", "0.87")
+    return rcs_scaled.round(2), betas, r_squared
 
-with col2:
-    st.metric("Critical Threshold", "1.32")
 
-with col3:
-    st.metric("System Risk", "Moderate")
+# =====================================================
+# 5. COMPUTE ORS (RISK ENGINE)
+# =====================================================
 
-# =============================
-# CLOUD-PROOF PDF EXPORT
-# =============================
-def generate_pdf():
+def compute_ors(risk_df, weights=None):
+    if weights is None:
+        weights = np.ones(risk_df.shape[1]) / risk_df.shape[1]
 
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    ors_raw = risk_df.values @ weights
+    ors_scaled = normalize_0_100(pd.Series(ors_raw))
 
-    elements = []
-    styles = getSampleStyleSheet()
+    return ors_scaled.round(2)
 
-    title_style = styles["Heading1"]
-    normal_style = styles["Normal"]
 
-    elements.append(Paragraph("FireKeeper Executive Report", title_style))
-    elements.append(Spacer(1, 0.3 * inch))
+# =====================================================
+# 6. CREDIT RATING ASSIGNMENT
+# =====================================================
 
-    elements.append(Paragraph(f"Generated: {datetime.now()}", normal_style))
-    elements.append(Spacer(1, 0.3 * inch))
+def assign_rating(rcs, ors):
 
-    elements.append(Paragraph("Stability Index: 0.87", normal_style))
-    elements.append(Paragraph("Critical Threshold: 1.32", normal_style))
-    elements.append(Paragraph("System Risk: Moderate", normal_style))
+    if rcs >= 85 and ors <= 30:
+        return "AAA"
+    elif rcs >= 75 and ors <= 35:
+        return "AA"
+    elif rcs >= 65 and ors <= 45:
+        return "A"
+    elif rcs >= 55 and ors <= 55:
+        return "BBB"
+    elif rcs >= 45 and ors <= 65:
+        return "BB"
+    elif rcs >= 35 and ors <= 75:
+        return "B"
+    else:
+        return "CCC/C"
 
-    doc.build(elements)
 
-    buffer.seek(0)
-    return buffer
+# =====================================================
+# 7. SAMPLE DATA GENERATION (DEMO)
+# =====================================================
 
-if st.button("Export Executive PDF Snapshot"):
-    pdf = generate_pdf()
+np.random.seed(42)
+n = 50
 
-    st.download_button(
-        label="Download PDF",
-        data=pdf,
-        file_name="FireKeeper_Executive_Report.pdf",
-        mime="application/pdf"
-    )
+survey_df = pd.DataFrame({
+    "E1": np.random.randint(1,6,n),
+    "E2": np.random.randint(1,6,n),
+    "E3": np.random.randint(1,6,n),
+    "E4": np.random.randint(1,6,n),
+
+    "EM1": np.random.randint(1,6,n),
+    "EM2": np.random.randint(1,6,n),
+    "EM3": np.random.randint(1,6,n),
+    "EM4": np.random.randint(1,6,n),
+
+    "I1": np.random.randint(1,6,n),
+    "I2": np.random.randint(1,6,n),
+    "I3": np.random.randint(1,6,n),
+    "I4": np.random.randint(1,6,n),
+
+    "P1": np.random.randint(1,6,n),
+    "P2": np.random.randint(1,6,n),
+    "P3": np.random.randint(1,6,n),
+    "P4": np.random.randint(1,6,n),
+})
+
+# Fake financial outcome (e.g., revenue growth)
+financial_outcome = np.random.normal(0.1, 0.03, n)
+
+
+# =====================================================
+# 8. COMPUTE DIMENSIONS
+# =====================================================
+
+entropy = calculate_dimension_score(survey_df, ["E1","E2","E3","E4"], reverse=True)
+empathy = calculate_dimension_score(survey_df, ["EM1","EM2","EM3","EM4"])
+identity = calculate_dimension_score(survey_df, ["I1","I2","I3","I4"])
+purpose = calculate_dimension_score(survey_df, ["P1","P2","P3","P4"])
+
+df_dims = pd.DataFrame({
+    "Entropy": entropy,
+    "Empathy": empathy,
+    "Identity": identity,
+    "Purpose": purpose
+})
+
+# Reliability check
+alpha_entropy = cronbach_alpha(survey_df[["E1","E2","E3","E4"]])
+alpha_empathy = cronbach_alpha(survey_df[["EM1","EM2","EM3","EM4"]])
+alpha_identity = cronbach_alpha(survey_df[["I1","I2","I3","I4"]])
+alpha_purpose = cronbach_alpha(survey_df[["P1","P2","P3","P4"]])
+
+print("Reliability (Cronbach Alpha)")
+print("Entropy:", round(alpha_entropy,3))
+print("Empathy:", round(alpha_empathy,3))
+print("Identity:", round(alpha_identity,3))
+print("Purpose:", round(alpha_purpose,3))
+
+
+# =====================================================
+# 9. COMPUTE RCS
+# =====================================================
+
+rcs, betas, r2 = compute_rcs(df_dims, financial_outcome)
+
+print("\nRegression Betas:", betas)
+print("R-squared:", round(r2,3))
+
+
+# =====================================================
+# 10. COMPUTE ORS (SIMULATED RISK DATA)
+# =====================================================
+
+risk_df = pd.DataFrame({
+    "RevenueVolatility": np.random.rand(n),
+    "LeadershipChurn": np.random.rand(n),
+    "StrategyDrift": np.random.rand(n),
+    "TalentFlightRisk": np.random.rand(n)
+})
+
+ors = compute_ors(risk_df)
+
+
+# =====================================================
+# 11. FINAL RATING
+# =====================================================
+
+final_rcs = rcs.mean()
+final_ors = ors.mean()
+rating = assign_rating(final_rcs, final_ors)
+
+print("\nFinal RCS:", round(final_rcs,2))
+print("Final ORS:", round(final_ors,2))
+print("Organizational Credit Rating:", rating)
+
+
+# =====================================================
+# 12. VISUALIZATION
+# =====================================================
+
+plt.figure()
+plt.plot(rcs.values)
+plt.title("RCS Distribution")
+plt.xlabel("Observation")
+plt.ylabel("RCS Score")
+plt.show()
+
+plt.figure()
+plt.scatter(rcs, ors)
+plt.title("RCS vs ORS")
+plt.xlabel("RCS")
+plt.ylabel("ORS")
+plt.show()
